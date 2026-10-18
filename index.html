@@ -382,10 +382,10 @@
         <p class="core-label" id="coreLabel">NÚCLEO EM ESPERA</p>
 
         <div class="voice-controls">
-          <button type="button" class="btn arm" id="armBtn">ATIVAR MICROFONE</button>
+          <button type="button" class="btn arm" id="armBtn">ATIVAR PALMAS</button>
           <div class="clap-dots" id="clapDots" aria-hidden="true"><span></span><span></span></div>
           <div class="level" aria-hidden="true"><span class="level-fill" id="levelFill"></span></div>
-          <p class="voice-hint" id="voiceHint" aria-live="polite">Microfone desligado.</p>
+          <p class="voice-hint" id="voiceHint" aria-live="polite">Desligado. Toque em ATIVAR PALMAS.</p>
         </div>
       </section>
 
@@ -417,20 +417,31 @@
     "use strict";
 
     const REPLY_DELAY_MS = 900;
-    const RECOGNITION_TIMEOUT_MS = 10000; // tempo máximo ouvindo um comando
 
     /* Ajustes da detecção de palmas.
-       Disparando sem querer? Aumente MIN_PEAK e RATIO.
-       Não detecta suas palmas? Diminua MIN_PEAK. */
+       Disparando sem querer? Aumente MIN_PEAK, RATIO e MIN_HF_RATIO.
+       Não detecta suas palmas? Diminua MIN_PEAK e ponha MIN_HF_RATIO em 0. */
     const CLAP = {
-      MIN_PEAK: 0.3,     // volume mínimo (0 a 1) para contar como palma
-      RATIO: 5,          // quantas vezes acima do ruído de fundo
-      MIN_GAP_MS: 150,   // intervalo mínimo entre duas palmas
-      MAX_GAP_MS: 800,   // intervalo máximo entre duas palmas
-      CONFIRM_MS: 400,   // espera para ver se vem uma 3ª palma (aplauso)
-      COOLDOWN_MS: 3000, // pausa depois de ativar
-      POLL_MS: 20        // de quanto em quanto tempo mede o som
+      MIN_PEAK: 0.3,        // volume mínimo (0 a 1) para contar como palma
+      RATIO: 5,             // quantas vezes acima do ruído de fundo
+      MIN_GAP_MS: 150,      // intervalo mínimo entre duas palmas
+      MAX_GAP_MS: 800,      // intervalo máximo entre duas palmas
+      CONFIRM_MS: 500,      // espera para ver se vem uma 3ª palma (aplauso)
+      COOLDOWN_MS: 3000,    // pausa depois de ligar/desligar
+      POLL_MS: 20,          // de quanto em quanto tempo mede o som
+      TAIL_MS: 110,         // palma é curta: depois disso o som tem que ter caído
+      TAIL_RATIO: 0.4,      // o som precisa cair abaixo disto do pico
+      HF_SPLIT_HZ: 1500,    // palma tem muito som agudo (acima desta frequência)
+      MIN_HF_RATIO: 0.2,    // parte mínima de agudos (0 desliga este filtro)
+      PEAK_SIMILARITY: 3    // as duas palmas devem ter força parecida
     };
+
+    /* Frases de voz que desligam a escuta (sem acentos, minúsculas) */
+    const STOP_PHRASES = [
+      "desligar microfone", "desligar o microfone",
+      "desativar microfone", "desativar o microfone",
+      "parar de ouvir", "tchau jarvis", "jarvis desligar"
+    ];
 
     const messagesEl = document.getElementById("messages");
     const formEl     = document.getElementById("chatForm");
@@ -458,29 +469,38 @@
       return "";
     }
 
-    /* Estado do microfone e da voz */
-    let mode = "off";              // "off" | "standby" | "recognizing"
-    let micEnabled = false;        // o usuário quer o modo de espera ligado
-    let starting = false;          // evita toques duplos enquanto liga
+    /* Estado.
+       mode "off":       nada ligado
+       mode "standby":   vigia de palmas (só mede volume; não grava nem envia nada)
+       mode "listening": escuta de voz contínua */
+    let mode = "off";
+    let sentinelWanted = false;      // o usuário ligou o vigia de palmas
+    let wantListening = false;       // a escuta de voz deve continuar ligada
+    let starting = false;
     let permissionDenied = false;
-    let offHint = "Microfone desligado.";
+    let clapsDuringListening = false; // palmas ainda funcionam durante a escuta?
+    let offHint = "Desligado. Toque em ATIVAR PALMAS.";
 
     let micStream = null;
     let audioCtx = null;
     let analyser = null;
     let samples = null;
+    let freqData = null;
     let pollTimer = null;
 
-    let baseline = 0.02;           // ruído de fundo (média lenta)
+    let baseline = 0.02;
     let wasLoud = false;
     let lastClapAt = 0;
     let cooldownUntil = 0;
+    let candidate = null;            // som forte esperando a checagem final
     let clapTimes = [];
+    let clapPeaks = [];
     let expireTimer = null;
     let confirmTimer = null;
 
     let recognition = null;
-    let recogTimer = null;
+    let restartTimer = null;
+    let quickFails = 0;
     let liveMsg = null;
     let activationTimer = null;
 
@@ -494,7 +514,7 @@
       },
       {
         keywords: ["quem e voce", "seu nome", "quem e jarvis"],
-        replies: ["Sou o JARVIS, versão 0.2. Por enquanto minhas respostas são simuladas: não há inteligência artificial real conectada."]
+        replies: ["Sou o JARVIS, versão 0.3. Por enquanto minhas respostas são simuladas: não há inteligência artificial real conectada."]
       },
       {
         keywords: ["hora", "horas"],
@@ -512,7 +532,7 @@
       },
       {
         keywords: ["ajuda", "comandos", "o que voce faz"],
-        replies: ["Por enquanto entendo: saudações, hora, data, status e quem sou eu. Tente uma dessas! Você também pode ativar o microfone e dar duas palmas."]
+        replies: ["Por enquanto entendo: saudações, hora, data, status e quem sou eu. Ative as palmas e bata duas palmas para eu ouvir; duas palmas de novo para parar."]
       },
       {
         keywords: ["obrigado", "obrigada", "valeu"],
@@ -525,9 +545,6 @@
       "Comando não reconhecido. Digite \"ajuda\" para ver o que sei fazer."
     ];
 
-    /* Itens do painel de status.
-       type "state": texto colorido (level: ok | warn | idle)
-       type "meter": barra de 0 a 100 */
     const STATUS_ITEMS = [
       { label: "Núcleo",   type: "state", get: () => ({ text: "ONLINE", level: "ok" }) },
       { label: "Conexão",  type: "state", get: () => navigator.onLine
@@ -544,8 +561,8 @@
 
     function micStatus() {
       if (permissionDenied) return { text: "NEGADO", level: "warn" };
-      if (mode === "standby") return { text: "EM ESPERA", level: "ok" };
-      if (mode === "recognizing") return { text: "OUVINDO", level: "ok" };
+      if (mode === "standby") return { text: "VIGIA DE PALMAS", level: "ok" };
+      if (mode === "listening") return { text: "OUVINDO", level: "ok" };
       return { text: "DESLIGADO", level: "idle" };
     }
 
@@ -567,6 +584,11 @@
         .trim();
     }
 
+    function isStopPhrase(text) {
+      const padded = " " + normalize(text) + " ";
+      return STOP_PHRASES.some(p => padded.includes(" " + p + " "));
+    }
+
     /* Núcleo */
     const CORE_LABELS = {
       idle: "NÚCLEO EM ESPERA",
@@ -584,19 +606,20 @@
       voiceHint.textContent = text;
     }
 
-    // Atualiza núcleo, botões e dica de acordo com o modo atual
     function renderMode() {
-      const isOff = mode === "off";
-      armBtn.textContent = isOff ? "ATIVAR MICROFONE" : "DESATIVAR MICROFONE";
-      armBtn.classList.toggle("active", !isOff);
-      micBtn.classList.toggle("active", mode === "recognizing");
+      armBtn.textContent = mode === "off" ? "ATIVAR PALMAS"
+        : mode === "standby" ? "DESATIVAR PALMAS" : "PARAR DE OUVIR";
+      armBtn.classList.toggle("active", mode !== "off");
+      micBtn.classList.toggle("active", mode === "listening");
 
       if (mode === "standby") {
         setCoreState("standby");
-        setHint("Em espera: dê duas palmas para ativar o JARVIS.");
-      } else if (mode === "recognizing") {
+        setHint("Vigia ligado: duas palmas ativam o microfone.");
+      } else if (mode === "listening") {
         setCoreState("listening");
-        setHint("Ouvindo seu comando... fale agora.");
+        setHint(clapsDuringListening
+          ? "Ouvindo. Para parar: duas palmas, o botão, ou diga \"desligar microfone\"."
+          : "Ouvindo. Para parar: o botão, ou diga \"desligar microfone\".");
       } else {
         setCoreState("idle");
         setHint(offHint);
@@ -684,7 +707,6 @@
       }, REPLY_DELAY_MS);
     }
 
-    /* Texto ao vivo do reconhecimento de voz */
     function showLive(text) {
       if (!text) return;
       if (!liveMsg) {
@@ -702,7 +724,7 @@
       }
     }
 
-    /* Captura do microfone e detecção de palmas */
+    /* Captura do microfone (só mede volume e agudos) */
     async function startCapture() {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -718,16 +740,22 @@
       const source = audioCtx.createMediaStreamSource(micStream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
-      source.connect(analyser); // não ligamos ao alto-falante, para evitar eco
+      analyser.smoothingTimeConstant = 0; // não suaviza: palma é um pico rápido
+      source.connect(analyser);           // não ligamos ao alto-falante
       samples = new Float32Array(analyser.fftSize);
+      freqData = new Float32Array(analyser.frequencyBinCount);
 
       baseline = 0.02;
       wasLoud = false;
       lastClapAt = 0;
+      candidate = null;
       resetClaps();
 
       const track = micStream.getAudioTracks()[0];
-      if (track) track.addEventListener("ended", onTrackEnded);
+      if (track) {
+        track.addEventListener("ended", onTrackEnded);
+        track.addEventListener("mute", onTrackMuted);
+      }
 
       clearInterval(pollTimer);
       pollTimer = setInterval(pollAudio, CLAP.POLL_MS);
@@ -738,6 +766,7 @@
       pollTimer = null;
       clearTimeout(confirmTimer);
       confirmTimer = null;
+      candidate = null;
       resetClaps();
 
       if (micStream) {
@@ -753,8 +782,17 @@
     }
 
     function onTrackEnded() {
-      if (mode === "standby") {
-        deactivate("O navegador interrompeu o microfone. Toque em ATIVAR MICROFONE para tentar de novo.");
+      if (mode !== "off") {
+        deactivate("O navegador interrompeu o microfone. Toque em ATIVAR PALMAS para tentar de novo.");
+      }
+    }
+
+    // Alguns celulares silenciam o vigia quando a escuta de voz começa
+    function onTrackMuted() {
+      if (mode === "listening" && clapsDuringListening) {
+        clapsDuringListening = false;
+        renderMode();
+        addMessage("system", "O navegador silenciou o vigia de palmas enquanto ouço sua voz. Para parar, use o botão ou diga \"desligar microfone\".");
       }
     }
 
@@ -764,12 +802,35 @@
 
     function resetClaps() {
       clapTimes = [];
+      clapPeaks = [];
       clearTimeout(expireTimer);
       expireTimer = null;
       updateDots(0);
     }
 
-    // Roda a cada POLL_MS: mede o volume de pico e procura palmas
+    // Parte da energia do som que fica nos agudos (palma tem muitos agudos)
+    function highFreqRatio() {
+      analyser.getFloatFrequencyData(freqData);
+      const binHz = audioCtx.sampleRate / analyser.fftSize;
+      const split = Math.round(CLAP.HF_SPLIT_HZ / binHz);
+      let low = 0;
+      let high = 0;
+      for (let i = 1; i < freqData.length; i++) {
+        const power = Math.pow(10, freqData[i] / 10);
+        if (i < split) low += power;
+        else high += power;
+      }
+      const total = low + high;
+      return total > 0 ? high / total : 0;
+    }
+
+    function rejectSound(reason) {
+      resetClaps();
+      setHint("Ignorado: " + reason + ".");
+      setTimeout(renderMode, 2500);
+    }
+
+    // Roda a cada POLL_MS: mede o som e procura palmas
     function pollAudio() {
       if (!analyser) return;
       analyser.getFloatTimeDomainData(samples);
@@ -784,10 +845,29 @@
       const now = performance.now();
       const loud = peak > CLAP.MIN_PEAK && peak > baseline * CLAP.RATIO;
 
-      // Palma = momento em que o som passa de "calmo" para "forte"
-      if (loud && !wasLoud && now >= cooldownUntil && now - lastClapAt > CLAP.MIN_GAP_MS) {
+      if (candidate) {
+        // Etapa 2: palma é curta. Se o som continua alto, não é palma.
+        if (now - candidate.t < 45) candidate.peak = Math.max(candidate.peak, peak);
+        if (now - candidate.t >= CLAP.TAIL_MS) {
+          const c = candidate;
+          candidate = null;
+          if (peak < c.peak * CLAP.TAIL_RATIO) registerClap(c.t, c.peak);
+          else rejectSound("som longo demais, não parece palma");
+        }
+      } else if (loud && !wasLoud && now >= cooldownUntil && now - lastClapAt > CLAP.MIN_GAP_MS) {
+        // Etapa 1: som forte e repentino
         lastClapAt = now;
-        registerClap(now);
+        if (confirmTimer) {
+          // Palma extra logo depois da segunda: parece aplauso
+          clearTimeout(confirmTimer);
+          confirmTimer = null;
+          cooldownUntil = now + 1500;
+          rejectSound("palmas demais, parece aplauso");
+        } else if (CLAP.MIN_HF_RATIO > 0 && highFreqRatio() < CLAP.MIN_HF_RATIO) {
+          rejectSound("som grave demais, não parece palma");
+        } else {
+          candidate = { t: now, peak: peak };
+        }
       }
       wasLoud = loud;
 
@@ -796,49 +876,46 @@
       if (baseline < 0.005) baseline = 0.005;
     }
 
-    function registerClap(now) {
-      // Uma palma extra logo depois da segunda: parece aplauso ou ruído
-      if (confirmTimer) {
-        clearTimeout(confirmTimer);
-        confirmTimer = null;
-        resetClaps();
-        cooldownUntil = now + 1500;
-        setHint("Palmas demais: ignorado (parece aplauso ou ruído).");
-        setTimeout(renderMode, 2500);
-        return;
-      }
-
+    function registerClap(t, peak) {
       // A segunda palma veio tarde demais: ela vira a primeira
-      if (clapTimes.length === 1 && now - clapTimes[0] > CLAP.MAX_GAP_MS) {
-        resetClaps();
+      if (clapTimes.length === 1 && t - clapTimes[0] > CLAP.MAX_GAP_MS) resetClaps();
+
+      // As duas palmas precisam ter força parecida
+      if (clapTimes.length === 1) {
+        const ratio = Math.max(peak, clapPeaks[0]) / Math.min(peak, clapPeaks[0]);
+        if (ratio > CLAP.PEAK_SIMILARITY) resetClaps();
       }
 
-      clapTimes.push(now);
+      clapTimes.push(t);
+      clapPeaks.push(peak);
       updateDots(clapTimes.length);
 
       if (clapTimes.length === 1) {
         clearTimeout(expireTimer);
-        expireTimer = setTimeout(resetClaps, CLAP.MAX_GAP_MS + 50);
+        expireTimer = setTimeout(resetClaps, CLAP.MAX_GAP_MS + 150);
       } else {
         clearTimeout(expireTimer);
         expireTimer = null;
         // Espera um pouco para ter certeza de que não é aplauso
         confirmTimer = setTimeout(() => {
           confirmTimer = null;
-          activate();
+          onDoubleClap();
         }, CLAP.CONFIRM_MS);
       }
     }
 
-    function activate() {
+    // Duas palmas: liga a escuta se estava desligada, desliga se estava ligada
+    function onDoubleClap() {
       resetClaps();
       cooldownUntil = performance.now() + CLAP.COOLDOWN_MS;
-      addMessage("system", "Duas palmas detectadas. JARVIS ativado.");
-      beginVoiceCommand();
-      playActivationAnimation();
+      if (mode === "standby") {
+        startListening("palmas");
+      } else if (mode === "listening") {
+        stopListening("Duas palmas detectadas. Microfone desativado; voltei a esperar palmas.");
+      }
     }
 
-    /* Ligar e desligar o modo de espera */
+    /* Ligar e desligar */
     function handleMicError(err) {
       const name = err && err.name ? err.name : "";
       let msg;
@@ -852,9 +929,7 @@
       } else {
         msg = "Erro ao abrir o microfone" + (name ? " (" + name + ")" : "") + ".";
       }
-      releaseCapture();
-      setMode("off");
-      addMessage("system", msg);
+      deactivate(msg);
     }
 
     async function startStandby() {
@@ -870,35 +945,22 @@
         return;
       }
       permissionDenied = false;
-      micEnabled = true;
+      sentinelWanted = true;
       setMode("standby");
-      addMessage("system", "Modo de espera ativo. Dê duas palmas para ativar o JARVIS.");
+      addMessage("system", "Vigia de palmas ativo. Duas palmas ativam o microfone; duas palmas de novo desativam.");
     }
 
-    // Volta ao modo de espera depois de ouvir um comando
-    async function resumeStandby() {
-      try {
-        await startCapture();
-        if (!micEnabled) {
-          releaseCapture();
-          return;
-        }
-        cooldownUntil = performance.now() + 1000;
-        setMode("standby");
-      } catch (err) {
-        micEnabled = false;
-        handleMicError(err);
-      }
-    }
-
+    // Desliga tudo (vigia e escuta)
     function deactivate(message) {
-      micEnabled = false;
-      clearTimeout(recogTimer);
-      releaseCapture();
+      sentinelWanted = false;
+      wantListening = false;
+      clearTimeout(restartTimer);
       if (recognition) {
         recognition.cancelled = true;
         try { recognition.abort(); } catch (_) {}
+        recognition = null;
       }
+      releaseCapture();
       hideLive();
       setMode("off");
       if (message) addMessage("system", message);
@@ -906,38 +968,54 @@
 
     async function onArmButton() {
       if (starting) return;
-      if (mode !== "off") {
-        deactivate("Microfone desativado. A escuta foi interrompida.");
-        return;
-      }
-      starting = true;
-      try {
-        await startStandby();
-      } finally {
-        starting = false;
+      if (mode === "off") {
+        starting = true;
+        try {
+          await startStandby();
+        } finally {
+          starting = false;
+        }
+      } else if (mode === "standby") {
+        deactivate("Vigia de palmas desativado.");
+      } else {
+        stopListening("Escuta encerrada.");
       }
     }
 
-    /* Reconhecimento de fala */
-    function beginVoiceCommand() {
-      if (mode === "recognizing") return;
+    /* Escuta de voz contínua */
+    function startListening(source) {
+      if (mode === "listening") return;
       if (!SpeechRec) {
         addMessage("system", "Este navegador não tem reconhecimento de voz. Use o Chrome no Android para ditar comandos.");
         return;
       }
-      releaseCapture(); // libera o microfone para o reconhecimento de fala
-      setMode("recognizing");
-      startRecognition();
+      wantListening = true;
+      quickFails = 0;
+      clapsDuringListening = !!micStream;
+      setMode("listening");
+      addMessage("system", source === "palmas"
+        ? "Duas palmas detectadas. Microfone ativado: estou ouvindo."
+        : "Microfone ativado: estou ouvindo.");
+      playActivationAnimation();
+      startRecognitionLoop();
     }
 
-    function startRecognition() {
+    function scheduleRestart(ms) {
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(startRecognitionLoop, ms);
+    }
+
+    function startRecognitionLoop() {
+      if (!wantListening || recognition) return;
+
       const rec = new SpeechRec();
       recognition = rec;
       rec.lang = "pt-BR";
       rec.interimResults = true;
-      rec.continuous = false;
+      rec.continuous = false; // reiniciamos sozinhos a cada frase (mais estável no Android)
       rec.maxAlternatives = 1;
 
+      const startedAt = Date.now();
       let finalText = "";
       let errorCode = null;
 
@@ -954,72 +1032,108 @@
       rec.onerror = (event) => { errorCode = event.error; };
 
       rec.onend = () => {
-        clearTimeout(recogTimer);
         hideLive();
         if (recognition === rec) recognition = null;
-        if (rec.cancelled) return;
-        finishRecognition(finalText.trim(), errorCode);
+        if (rec.cancelled || !wantListening) return;
+
+        const text = finalText.trim();
+
+        if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+          permissionDenied = true;
+          deactivate("Permissão negada para o microfone ou para o reconhecimento de voz. Toque no cadeado ao lado do endereço do site, libere o microfone e tente de novo.");
+          return;
+        }
+        if (errorCode === "audio-capture" && micStream) {
+          // Neste aparelho o vigia de palmas atrapalha a escuta de voz
+          releaseCapture();
+          clapsDuringListening = false;
+          renderMode();
+          addMessage("system", "Neste aparelho não dá para ouvir palmas e voz ao mesmo tempo. Para parar, use o botão ou diga \"desligar microfone\".");
+          scheduleRestart(300);
+          return;
+        }
+        if (errorCode === "audio-capture") {
+          stopListening("Não consegui capturar o áudio. Outro app pode estar usando o microfone.");
+          return;
+        }
+        if (errorCode === "network") {
+          stopListening("O reconhecimento de voz do navegador precisa de internet.");
+          return;
+        }
+
+        quickFails = (!text && Date.now() - startedAt < 1000) ? quickFails + 1 : 0;
+        if (quickFails >= 6) {
+          stopListening("Não consegui manter a escuta de voz. Tente de novo.");
+          return;
+        }
+
+        if (text) handleVoiceCommand(text);
+        if (wantListening) scheduleRestart(250);
       };
 
       try {
         rec.start();
       } catch (err) {
         recognition = null;
-        finishRecognition("", "start-failed");
-        return;
+        quickFails++;
+        if (quickFails >= 6) stopListening("Não foi possível iniciar o reconhecimento de voz. Tente de novo.");
+        else scheduleRestart(500);
       }
-
-      clearTimeout(recogTimer);
-      recogTimer = setTimeout(() => {
-        try { rec.stop(); } catch (_) {}
-      }, RECOGNITION_TIMEOUT_MS);
     }
 
-    function finishRecognition(text, errorCode) {
-      if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
-        permissionDenied = true;
-        micEnabled = false;
+    // Para a escuta de voz e volta ao vigia de palmas (ou desliga, se não houver vigia)
+    function stopListening(message) {
+      wantListening = false;
+      clearTimeout(restartTimer);
+      if (recognition) {
+        recognition.cancelled = true;
+        try { recognition.abort(); } catch (_) {}
+        recognition = null;
+      }
+      hideLive();
+      cooldownUntil = performance.now() + CLAP.COOLDOWN_MS;
+      if (message) addMessage("system", message);
+
+      if (sentinelWanted) returnToStandby();
+      else {
+        releaseCapture();
         setMode("off");
-        addMessage("system", "Permissão negada para o microfone ou para o reconhecimento de voz. Toque no cadeado ao lado do endereço do site, libere o microfone e tente de novo.");
+      }
+    }
+
+    async function returnToStandby() {
+      setMode("standby");
+      if (micStream) {
+        candidate = null;
+        resetClaps();
         return;
       }
-
-      if (text) {
-        handleVoiceCommand(text);
-      } else if (errorCode === "audio-capture") {
-        addMessage("system", "Não consegui capturar o áudio. Outro app pode estar usando o microfone.");
-      } else if (errorCode === "network") {
-        addMessage("system", "O reconhecimento de voz do navegador precisa de internet.");
-      } else if (errorCode === "start-failed") {
-        addMessage("system", "Não foi possível iniciar o reconhecimento de voz agora. Tente de novo.");
-      } else if (errorCode && errorCode !== "no-speech" && errorCode !== "aborted") {
-        addMessage("system", "Erro no reconhecimento de voz: " + errorCode + ".");
-      } else {
-        addMessage("system", "Nenhum comando ouvido.");
+      try {
+        await startCapture();
+      } catch (err) {
+        handleMicError(err);
+        return;
       }
-
-      if (micEnabled) resumeStandby();
-      else setMode("off");
+      if (!sentinelWanted) releaseCapture();
     }
 
     // Aqui o comando reconhecido chega como texto.
     function handleVoiceCommand(text) {
       addMessage("user", text, "VOCÊ (VOZ)");
+      if (isStopPhrase(text)) {
+        stopListening("Microfone desativado por comando de voz.");
+        return;
+      }
       // PRÓXIMA ETAPA: enviar este texto para a IA por um servidor SEU.
       // NUNCA coloque chaves de API aqui no frontend.
       addMessage("system", "Comando reconhecido, mas NÃO executado: a integração com a IA ainda não está conectada.");
     }
 
-    // Botão de microfone ao lado do campo de texto: fala um comando direto
+    // Botão de microfone ao lado do campo de texto: liga/desliga a escuta direto
     function onMicButton() {
-      if (mode === "recognizing") {
-        if (recognition) {
-          try { recognition.stop(); } catch (_) {}
-        }
-        return;
-      }
       if (starting) return;
-      beginVoiceCommand();
+      if (mode === "listening") stopListening("Escuta encerrada.");
+      else startListening("botão");
     }
 
     /* Painel de status */
@@ -1076,7 +1190,7 @@
     // Navegadores suspendem o microfone em segundo plano: desligamos e avisamos
     document.addEventListener("visibilitychange", () => {
       if (document.hidden && mode !== "off") {
-        deactivate("A página saiu da tela e o navegador suspende o microfone em segundo plano. Toque em ATIVAR MICROFONE para voltar.");
+        deactivate("A página saiu da tela e o navegador suspende o microfone em segundo plano. Toque em ATIVAR PALMAS para voltar.");
       }
     });
 
@@ -1088,10 +1202,11 @@
     setInterval(updateStatus, 2500);
     setInterval(updateClock, 1000);
 
-    addMessage("assistant", "Sistemas iniciados. Sou o JARVIS, versão 0.2 (respostas simuladas). Toque em ATIVAR MICROFONE para o modo de espera por palmas, ou digite \"ajuda\".");
+    addMessage("assistant", "Sistemas iniciados. Sou o JARVIS, versão 0.3 (respostas simuladas). Toque em ATIVAR PALMAS: depois, duas palmas ligam o microfone e duas palmas desligam. Ou digite \"ajuda\".");
     if (!SpeechRec) {
       addMessage("system", "Este navegador não tem reconhecimento de voz: as palmas funcionam, mas não será possível ditar comandos.");
     }
+  
   </script>
 </body>
 </html>
