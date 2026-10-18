@@ -54,9 +54,6 @@
       padding: 12px;
       grid-template-columns: 1fr;
     }
-    .core-panel   { grid-area: core; }
-    .chat-panel   { grid-area: chat; }
-    .status-panel { grid-area: status; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--cyan-dim);
@@ -341,6 +338,9 @@
 
     /* Tablet (Fire HD 8) e telas maiores */
     @media (min-width: 700px) {
+      .core-panel   { grid-area: core; }
+      .chat-panel   { grid-area: chat; }
+      .status-panel { grid-area: status; }
       .app { height: 100dvh; display: flex; flex-direction: column; }
       .layout {
         flex: 1;
