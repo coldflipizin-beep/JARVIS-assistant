@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS</title>
+  <style>
+    /* ===== Variáveis (mude as cores aqui) ===== */
+    :root {
+      --bg: #050b14;
+      --panel: rgba(8, 22, 38, 0.8);
+      --cyan: #00e5ff;
+      --cyan-dim: rgba(0, 229, 255, 0.28);
+      --text: #cfefff;
+      --muted: #6f93a8;
+      --ok: #19ffa3;
+      --warn: #ffb020;
+      --core-size: clamp(150px, 42vw, 240px);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Courier New", monospace;
+      color: var(--text);
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(circle at 50% 0%, rgba(0, 229, 255, 0.12), transparent 60%),
+        linear-gradient(var(--cyan-dim) 1px, transparent 1px),
+        linear-gradient(90deg, var(--cyan-dim) 1px, transparent 1px);
+      background-size: auto, 40px 40px, 40px 40px;
+      background-attachment: fixed;
+      min-height: 100dvh;
+    }
+
+    /* ===== Barra superior ===== */
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--cyan-dim);
+    }
+    .logo {
+      color: var(--cyan);
+      letter-spacing: 4px;
+      font-weight: bold;
+      text-shadow: 0 0 10px var(--cyan);
+    }
+    .clock { color: var(--muted); font-size: 0.9rem; }
+
+    /* ===== Layout (celular: tudo empilhado) ===== */
+    .layout {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      grid-template-columns: 1fr;
+    }
+    .core-panel   { grid-area: core; }
+    .chat-panel   { grid-area: chat; }
+    .status-panel { grid-area: status; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--cyan-dim);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 0 18px rgba(0, 229, 255, 0.08), inset 0 0 20px rgba(0, 229, 255, 0.04);
+    }
+    .panel-title {
+      font-size: 0.75rem;
+      letter-spacing: 3px;
+      color: var(--cyan);
+      margin-bottom: 10px;
+    }
+
+    /* ===== Núcleo animado ===== */
+    .core-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .core {
+      position: relative;
+      width: var(--core-size);
+      height: var(--core-size);
+      --speed: 1;
+    }
+    .ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid transparent;
+    }
+    .ring-1 {
+      inset: 0;
+      border-top-color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      animation: spin calc(8s / var(--speed)) linear infinite;
+    }
+    .ring-2 {
+      inset: 12%;
+      border: 2px dashed var(--cyan-dim);
+      animation: spin calc(14s / var(--speed)) linear infinite reverse;
+    }
+    .ring-3 {
+      inset: 24%;
+      border-left-color: var(--cyan);
+      border-right-color: var(--cyan);
+      animation: spin calc(5s / var(--speed)) linear infinite;
+    }
+    .core-center {
+      position: absolute;
+      inset: 38%;
+      border-radius: 50%;
+      background: radial-gradient(circle, #e6fcff 0%, var(--cyan) 45%, transparent 75%);
+      box-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim);
+      animation: pulse calc(2.4s / var(--speed)) ease-in-out infinite;
+    }
+    .core-label {
+      font-size: 0.8rem;
+      letter-spacing: 3px;
+      color: var(--cyan);
+    }
+
+    /* Estados do núcleo (o JavaScript muda data-state) */
+    .core[data-state="thinking"]  { --speed: 3; }
+    .core[data-state="listening"] { --speed: 2; }
+    .core[data-state="listening"] .core-center {
+      background: radial-gradient(circle, #fff3e0 0%, var(--warn) 45%, transparent 75%);
+      box-shadow: 0 0 30px var(--warn), 0 0 60px rgba(255, 176, 32, 0.3);
+    }
+
+    @keyframes spin  { to { transform: rotate(360deg); } }
+    @keyframes pulse {
+      0%, 100% { transform: scale(0.9); opacity: 0.8; }
+      50%      { transform: scale(1.12); opacity: 1; }
+    }
+
+    /* ===== Conversa ===== */
+    .chat-panel {
+      display: flex;
+      flex-direction: column;
+      height: 62dvh;
+      min-height: 340px;
+    }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+      margin-bottom: 10px;
+    }
+    .message {
+      max-width: 88%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .message .who {
+      display: block;
+      font-size: 0.65rem;
+      letter-spacing: 2px;
+      margin-bottom: 3px;
+      opacity: 0.7;
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid var(--cyan-dim);
+    }
+    .message.user {
+      align-self: flex-end;
+      background: rgba(25, 255, 163, 0.1);
+      border: 1px solid rgba(25, 255, 163, 0.3);
+    }
+    .message.system {
+      align-self: center;
+      max-width: 100%;
+      background: transparent;
+      border: 1px dashed var(--warn);
+      color: var(--warn);
+      font-size: 0.8rem;
+      text-align: center;
+    }
+    .typing { display: inline-flex; gap: 4px; }
+    .typing span {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--cyan);
+      animation: blink 1s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+    /* ===== Campo de digitar ===== */
+    .composer { display: flex; gap: 8px; }
+    .composer input {
+      flex: 1;
+      min-width: 0;
+      min-height: 46px;
+      padding: 0 12px;
+      font: inherit;
+      font-size: 16px;
+      color: var(--text);
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--cyan-dim);
+      border-radius: 8px;
+      outline: none;
+    }
+    .composer input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan-dim);
+    }
+    .btn {
+      min-height: 46px;
+      min-width: 46px;
+      padding: 0 14px;
+      font: inherit;
+      font-size: 0.8rem;
+      letter-spacing: 2px;
+      color: var(--cyan);
+      background: rgba(0, 229, 255, 0.08);
+      border: 1px solid var(--cyan);
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn:active { background: rgba(0, 229, 255, 0.25); }
+    .btn.mic.active {
+      color: var(--warn);
+      border-color: var(--warn);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    /* ===== Painel de status ===== */
+    .status-list { list-style: none; display: grid; gap: 10px; }
+    .status-item {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 4px 8px;
+      font-size: 0.8rem;
+    }
+    .status-label { color: var(--muted); }
+    .badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      font-size: 0.7rem;
+      letter-spacing: 1px;
+    }
+    .badge[data-level="ok"]   { color: var(--ok); }
+    .badge[data-level="warn"] { color: var(--warn); }
+    .badge[data-level="idle"] { color: var(--muted); }
+    .meter-pct { color: var(--cyan); }
+    .meter {
+      flex-basis: 100%;
+      height: 6px;
+      background: rgba(0, 229, 255, 0.12);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .meter-fill {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--cyan), var(--ok));
+      transition: width 0.8s ease;
+    }
+
+    /* ===== Tablet (Fire HD 8) e telas maiores ===== */
+    @media (min-width: 700px) {
+      .app { height: 100dvh; display: flex; flex-direction: column; }
+      .layout {
+        flex: 1;
+        min-height: 0;
+        grid-template-columns: 300px 1fr;
+        grid-template-rows: auto 1fr;
+        grid-template-areas:
+          "core   chat"
+          "status chat";
+      }
+      .chat-panel { height: auto; min-height: 0; }
+      .status-panel { overflow-y: auto; }
+    }
+
+    /* Celular/tablet deitado (pouca altura) */
+    @media (min-width: 700px) and (max-height: 520px) {
+      :root { --core-size: 120px; }
+      .layout { grid-template-columns: 240px 1fr; }
+    }
+
+    /* Respeita quem prefere menos animação */
+    @media (prefers-reduced-motion: reduce) {
+      .ring, .core-center, .typing span, .btn.mic.active { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <span class="logo">J.A.R.V.I.S.</span>
+      <span class="clock" id="clock">--:--:--</span>
+    </header>
+
+    <main class="layout">
+      <!-- Núcleo -->
+      <section class="panel core-panel">
+        <div class="core" id="core" data-state="idle">
+          <div class="ring ring-1"></div>
+          <div class="ring ring-2"></div>
+          <div class="ring ring-3"></div>
+          <div class="core-center"></div>
+        </div>
+        <p class="core-label" id="coreLabel">NÚCLEO EM ESPERA</p>
+      </section>
+
+      <!-- Conversa -->
+      <section class="panel chat-panel">
+        <h2 class="panel-title">COMUNICAÇÃO</h2>
+        <div class="messages" id="messages" aria-live="polite"></div>
+
+        <form class="composer" id="chatForm" autocomplete="off">
+          <button type="button" class="btn mic" id="micBtn" aria-label="Ativar microfone">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+              <path d="M5 11a7 7 0 0 0 14 0"></path>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+            </svg>
+          </button>
+          <input type="text" id="userInput" placeholder="Digite uma mensagem..." aria-label="Mensagem">
+          <button type="submit" class="btn send">ENVIAR</button>
+        </form>
+      </section>
+
+      <!-- Status -->
+      <section class="panel status-panel">
+        <h2 class="panel-title">STATUS DO SISTEMA</h2>
+        <ul class="status-list" id="statusList"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    "use strict";
+
+    /* ===== Configurações (fáceis de mudar) ===== */
+    const REPLY_DELAY_MS = 900;
+
+    /* ===== Elementos da página ===== */
+    const messagesEl = document.getElementById("messages");
+    const formEl     = document.getElementById("chatForm");
+    const inputEl    = document.getElementById("userInput");
+    const micBtn     = document.getElementById("micBtn");
+    const coreEl     = document.getElementById("core");
+    const coreLabel  = document.getElementById("coreLabel");
+    const statusList = document.getElementById("statusList");
+    const clockEl    = document.getElementById("clock");
+
+    /* ===== Respostas simuladas =====
+       Para ensinar algo novo ao JARVIS, copie um bloco e mude
+       as palavras-chave (sem acentos, minúsculas) e as respostas.
+       Cada resposta pode ser um texto ou uma função que retorna texto. */
+    const RULES = [
+      {
+        keywords: ["ola", "oi", "bom dia", "boa tarde", "boa noite", "e ai"],
+        replies: ["Olá! Todos os sistemas estão online. Como posso ajudar?",
+                  "Bem-vindo de volta. Em que posso ser útil?"]
+      },
+      {
+        keywords: ["quem e voce", "seu nome", "quem e jarvis"],
+        replies: ["Sou o JARVIS, versão 0.1. Por enquanto minhas respostas são simuladas: não há inteligência artificial real conectada."]
+      },
+      {
+        keywords: ["hora", "horas"],
+        replies: [() => "Agora são " + new Date().toLocaleTimeString("pt-BR") + "."]
+      },
+      {
+        keywords: ["data", "dia", "hoje"],
+        replies: [() => "Hoje é " + new Date().toLocaleDateString("pt-BR", {
+          weekday: "long", day: "numeric", month: "long", year: "numeric"
+        }) + "."]
+      },
+      {
+        keywords: ["status", "sistema", "sistemas"],
+        replies: ["Núcleo online. Voz e IA real ainda não foram instaladas. Veja o painel de status."]
+      },
+      {
+        keywords: ["ajuda", "comandos", "o que voce faz"],
+        replies: ["Por enquanto entendo: saudações, hora, data, status e quem sou eu. Tente uma dessas!"]
+      },
+      {
+        keywords: ["obrigado", "obrigada", "valeu"],
+        replies: ["Sempre às ordens.", "Disponha."]
+      }
+    ];
+
+    const FALLBACK_REPLIES = [
+      "Ainda não sei responder isso. Minhas respostas nesta versão são simuladas.",
+      "Comando não reconhecido. Digite \"ajuda\" para ver o que sei fazer."
+    ];
+
+    /* ===== Itens do painel de status =====
+       type "state": mostra um texto colorido (level: ok | warn | idle)
+       type "meter": mostra uma barra de 0 a 100 */
+    const STATUS_ITEMS = [
+      { label: "Núcleo",   type: "state", get: () => ({ text: "ONLINE", level: "ok" }) },
+      { label: "Conexão",  type: "state", get: () => navigator.onLine
+          ? { text: "ONLINE", level: "ok" }
+          : { text: "OFFLINE", level: "warn" } },
+      { label: "Voz",      type: "state", get: () => ({ text: "EM BREVE", level: "idle" }) },
+      { label: "IA real",  type: "state", get: () => ({ text: "NÃO CONECTADA", level: "idle" }) },
+      { label: "CPU (simulada)",     type: "meter", get: () => randomBetween(15, 70) },
+      { label: "Memória (simulada)", type: "meter", get: () => randomBetween(30, 80) }
+    ];
+
+    /* ===== Funções utilitárias ===== */
+    function randomBetween(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function pickRandom(list) {
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    // "Olá, Tudo?" -> "ola tudo"
+    function normalize(text) {
+      return text
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    }
+
+    /* ===== Núcleo ===== */
+    const CORE_LABELS = {
+      idle: "NÚCLEO EM ESPERA",
+      thinking: "PROCESSANDO...",
+      listening: "OUVINDO (SIMULADO)"
+    };
+
+    function setCoreState(state) {
+      coreEl.dataset.state = state;
+      coreLabel.textContent = CORE_LABELS[state];
+    }
+
+    /* ===== Conversa ===== */
+    function addMessage(sender, text) {
+      const msg = document.createElement("div");
+      msg.className = "message " + sender;
+
+      if (sender !== "system") {
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = sender === "user" ? "VOCÊ" : "JARVIS";
+        msg.appendChild(who);
+      }
+
+      const body = document.createElement("span");
+      body.textContent = text; // textContent evita injetar HTML sem querer
+      msg.appendChild(body);
+
+      messagesEl.appendChild(msg);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return msg;
+    }
+
+    function showTyping() {
+      const msg = document.createElement("div");
+      msg.className = "message assistant";
+      msg.innerHTML =
+        '<span class="who">JARVIS</span>' +
+        '<span class="typing"><span></span><span></span><span></span></span>';
+      messagesEl.appendChild(msg);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return msg;
+    }
+
+    function getReply(userText) {
+      const padded = " " + normalize(userText) + " ";
+      for (const rule of RULES) {
+        const found = rule.keywords.some(k => padded.includes(" " + k + " "));
+        if (found) {
+          const reply = pickRandom(rule.replies);
+          return typeof reply === "function" ? reply() : reply;
+        }
+      }
+      return pickRandom(FALLBACK_REPLIES);
+    }
+
+    function handleSend(event) {
+      event.preventDefault();
+      const text = inputEl.value.trim();
+      if (!text) return;
+
+      addMessage("user", text);
+      inputEl.value = "";
+      inputEl.focus();
+
+      setCoreState("thinking");
+      const typing = showTyping();
+
+      setTimeout(() => {
+        typing.remove();
+        addMessage("assistant", getReply(text));
+        setCoreState("idle");
+      }, REPLY_DELAY_MS);
+    }
+
+    /* ===== Microfone (só visual por enquanto) ===== */
+    let listening = false;
+
+    function startVoice() {
+      // PRÓXIMA ETAPA: aqui entrará o reconhecimento de voz real.
+      addMessage("system", "Microfone visual ativado. O reconhecimento de voz ainda não foi implementado.");
+    }
+
+    function stopVoice() {
+      // PRÓXIMA ETAPA: aqui vamos parar o reconhecimento de voz.
+    }
+
+    function toggleMic() {
+      listening = !listening;
+      micBtn.classList.toggle("active", listening);
+      setCoreState(listening ? "listening" : "idle");
+      if (listening) startVoice(); else stopVoice();
+    }
+
+    /* ===== Painel de status ===== */
+    function buildStatus() {
+      STATUS_ITEMS.forEach(item => {
+        const li = document.createElement("li");
+        li.className = "status-item";
+
+        const label = document.createElement("span");
+        label.className = "status-label";
+        label.textContent = item.label;
+        li.appendChild(label);
+
+        if (item.type === "meter") {
+          item.pctEl = document.createElement("span");
+          item.pctEl.className = "meter-pct";
+          const bar = document.createElement("span");
+          bar.className = "meter";
+          item.fillEl = document.createElement("span");
+          item.fillEl.className = "meter-fill";
+          bar.appendChild(item.fillEl);
+          li.append(item.pctEl, bar);
+        } else {
+          item.valueEl = document.createElement("span");
+          item.valueEl.className = "badge";
+          li.appendChild(item.valueEl);
+        }
+        statusList.appendChild(li);
+      });
+    }
+
+    function updateStatus() {
+      STATUS_ITEMS.forEach(item => {
+        const value = item.get();
+        if (item.type === "meter") {
+          item.fillEl.style.width = value + "%";
+          item.pctEl.textContent = value + "%";
+        } else {
+          item.valueEl.textContent = value.text;
+          item.valueEl.dataset.level = value.level;
+        }
+      });
+    }
+
+    function updateClock() {
+      clockEl.textContent = new Date().toLocaleTimeString("pt-BR");
+    }
+
+    /* ===== Inicialização ===== */
+    formEl.addEventListener("submit", handleSend);
+    micBtn.addEventListener("click", toggleMic);
+
+    buildStatus();
+    updateStatus();
+    updateClock();
+    setInterval(updateStatus, 2500);
+    setInterval(updateClock, 1000);
+
+    addMessage("assistant", "Sistemas iniciados. Sou o JARVIS, versão 0.1 (respostas simuladas). Digite \"ajuda\" para ver o que sei fazer.");
+  </script>
+</body>
+</html>
