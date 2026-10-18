@@ -1,3 +1,598 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS</title>
+  <style>
+    /* Variáveis (mude as cores aqui) */
+    :root {
+      --bg: #050b14;
+      --panel: rgba(8, 22, 38, 0.8);
+      --cyan: #00e5ff;
+      --cyan-dim: rgba(0, 229, 255, 0.28);
+      --text: #cfefff;
+      --muted: #6f93a8;
+      --ok: #19ffa3;
+      --warn: #ffb020;
+      --core-size: clamp(150px, 42vw, 240px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Courier New", monospace;
+      color: var(--text);
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(circle at 50% 0%, rgba(0, 229, 255, 0.12), transparent 60%),
+        linear-gradient(var(--cyan-dim) 1px, transparent 1px),
+        linear-gradient(90deg, var(--cyan-dim) 1px, transparent 1px);
+      background-size: auto, 40px 40px, 40px 40px;
+      background-attachment: fixed;
+      min-height: 100dvh;
+    }
+
+    /* Barra superior */
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--cyan-dim);
+    }
+    .logo {
+      color: var(--cyan);
+      letter-spacing: 4px;
+      font-weight: bold;
+      text-shadow: 0 0 10px var(--cyan);
+    }
+    .clock { color: var(--muted); font-size: 0.9rem; }
+
+    /* Layout (celular: tudo empilhado) */
+    .layout {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      grid-template-columns: 1fr;
+    }
+    .core-panel   { grid-area: core; }
+    .chat-panel   { grid-area: chat; }
+    .status-panel { grid-area: status; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--cyan-dim);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 0 18px rgba(0, 229, 255, 0.08), inset 0 0 20px rgba(0, 229, 255, 0.04);
+    }
+    .panel-title {
+      font-size: 0.75rem;
+      letter-spacing: 3px;
+      color: var(--cyan);
+      margin-bottom: 10px;
+    }
+
+    /* Núcleo animado */
+    .core-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      overflow: hidden;
+    }
+    .core {
+      position: relative;
+      width: var(--core-size);
+      height: var(--core-size);
+      --speed: 1;
+    }
+    .ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid transparent;
+    }
+    .ring-1 {
+      inset: 0;
+      border-top-color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      animation: spin calc(8s / var(--speed)) linear infinite;
+    }
+    .ring-2 {
+      inset: 12%;
+      border: 2px dashed var(--cyan-dim);
+      animation: spin calc(14s / var(--speed)) linear infinite reverse;
+    }
+    .ring-3 {
+      inset: 24%;
+      border-left-color: var(--cyan);
+      border-right-color: var(--cyan);
+      animation: spin calc(5s / var(--speed)) linear infinite;
+    }
+    .core-center {
+      position: absolute;
+      inset: 38%;
+      border-radius: 50%;
+      background: radial-gradient(circle, #e6fcff 0%, var(--cyan) 45%, transparent 75%);
+      box-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim);
+      animation: pulse calc(2.4s / var(--speed)) ease-in-out infinite;
+    }
+    .core-label {
+      font-size: 0.8rem;
+      letter-spacing: 3px;
+      color: var(--cyan);
+      text-align: center;
+    }
+
+    /* Estados do núcleo (o JavaScript muda data-state) */
+    .core[data-state="standby"]   { --speed: 0.6; }
+    .core[data-state="thinking"]  { --speed: 3; }
+    .core[data-state="listening"] { --speed: 2; }
+    .core[data-state="listening"] .core-center {
+      background: radial-gradient(circle, #fff3e0 0%, var(--warn) 45%, transparent 75%);
+      box-shadow: 0 0 30px var(--warn), 0 0 60px rgba(255, 176, 32, 0.3);
+    }
+
+    /* Animação de ativação (duas palmas detectadas) */
+    .core.activating { --speed: 5; }
+    .core.activating::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 3px solid var(--cyan);
+      box-shadow: 0 0 30px var(--cyan);
+      animation: burst 1.2s ease-out forwards;
+    }
+    .core.activating .core-center {
+      box-shadow: 0 0 60px #ffffff, 0 0 120px var(--cyan);
+    }
+    @keyframes spin  { to { transform: rotate(360deg); } }
+    @keyframes pulse {
+      0%, 100% { transform: scale(0.9); opacity: 0.8; }
+      50%      { transform: scale(1.12); opacity: 1; }
+    }
+    @keyframes burst {
+      from { transform: scale(0.3); opacity: 1; }
+      to   { transform: scale(1.4); opacity: 0; }
+    }
+
+    /* Controles de voz */
+    .voice-controls {
+      width: 100%;
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+    }
+    .btn.arm { width: 100%; }
+    .btn.arm.active { color: var(--ok); border-color: var(--ok); }
+    .clap-dots { display: flex; gap: 10px; }
+    .clap-dots span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 1px solid var(--cyan);
+      opacity: 0.4;
+      transition: all 0.1s;
+    }
+    .clap-dots span.on {
+      background: var(--cyan);
+      box-shadow: 0 0 10px var(--cyan);
+      opacity: 1;
+    }
+    .level {
+      width: 100%;
+      height: 6px;
+      background: rgba(0, 229, 255, 0.12);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .level-fill {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--cyan);
+    }
+    .voice-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-align: center;
+      min-height: 2.4em;
+    }
+
+    /* Conversa */
+    .chat-panel {
+      display: flex;
+      flex-direction: column;
+      height: 62dvh;
+      min-height: 340px;
+    }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+      margin-bottom: 10px;
+    }
+    .message {
+      max-width: 88%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .message .who {
+      display: block;
+      font-size: 0.65rem;
+      letter-spacing: 2px;
+      margin-bottom: 3px;
+      opacity: 0.7;
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid var(--cyan-dim);
+    }
+    .message.user {
+      align-self: flex-end;
+      background: rgba(25, 255, 163, 0.1);
+      border: 1px solid rgba(25, 255, 163, 0.3);
+    }
+    .message.live { opacity: 0.65; font-style: italic; }
+    .message.system {
+      align-self: center;
+      max-width: 100%;
+      background: transparent;
+      border: 1px dashed var(--warn);
+      color: var(--warn);
+      font-size: 0.8rem;
+      text-align: center;
+    }
+    .typing { display: inline-flex; gap: 4px; }
+    .typing span {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--cyan);
+      animation: blink 1s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+    /* Campo de digitar */
+    .composer { display: flex; gap: 8px; }
+    .composer input {
+      flex: 1;
+      min-width: 0;
+      min-height: 46px;
+      padding: 0 12px;
+      font: inherit;
+      font-size: 16px;
+      color: var(--text);
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--cyan-dim);
+      border-radius: 8px;
+      outline: none;
+    }
+    .composer input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan-dim);
+    }
+    .btn {
+      min-height: 46px;
+      min-width: 46px;
+      padding: 0 14px;
+      font: inherit;
+      font-size: 0.8rem;
+      letter-spacing: 2px;
+      color: var(--cyan);
+      background: rgba(0, 229, 255, 0.08);
+      border: 1px solid var(--cyan);
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn:active { background: rgba(0, 229, 255, 0.25); }
+    .btn.mic.active {
+      color: var(--warn);
+      border-color: var(--warn);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    /* Painel de status */
+    .status-list { list-style: none; display: grid; gap: 10px; }
+    .status-item {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 4px 8px;
+      font-size: 0.8rem;
+    }
+    .status-label { color: var(--muted); }
+    .badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      font-size: 0.7rem;
+      letter-spacing: 1px;
+    }
+    .badge[data-level="ok"]   { color: var(--ok); }
+    .badge[data-level="warn"] { color: var(--warn); }
+    .badge[data-level="idle"] { color: var(--muted); }
+    .meter-pct { color: var(--cyan); }
+    .meter {
+      flex-basis: 100%;
+      height: 6px;
+      background: rgba(0, 229, 255, 0.12);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .meter-fill {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--cyan), var(--ok));
+      transition: width 0.8s ease;
+    }
+
+    /* Tablet (Fire HD 8) e telas maiores */
+    @media (min-width: 700px) {
+      .app { height: 100dvh; display: flex; flex-direction: column; }
+      .layout {
+        flex: 1;
+        min-height: 0;
+        grid-template-columns: 300px 1fr;
+        grid-template-rows: auto 1fr;
+        grid-template-areas:
+          "core   chat"
+          "status chat";
+      }
+      .chat-panel { height: auto; min-height: 0; }
+      .status-panel { overflow-y: auto; }
+    }
+    @media (min-width: 700px) and (max-height: 520px) {
+      :root { --core-size: 120px; }
+      .layout { grid-template-columns: 240px 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ring, .core-center, .typing span, .btn.mic.active { animation: none; }
+      .core.activating::after { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <span class="logo">J.A.R.V.I.S.</span>
+      <span class="clock" id="clock">--:--:--</span>
+    </header>
+
+    <main class="layout">
+      <section class="panel core-panel">
+        <div class="core" id="core" data-state="idle">
+          <div class="ring ring-1"></div>
+          <div class="ring ring-2"></div>
+          <div class="ring ring-3"></div>
+          <div class="core-center"></div>
+        </div>
+        <p class="core-label" id="coreLabel">NÚCLEO EM ESPERA</p>
+
+        <div class="voice-controls">
+          <button type="button" class="btn arm" id="armBtn">ATIVAR MICROFONE</button>
+          <div class="clap-dots" id="clapDots" aria-hidden="true"><span></span><span></span></div>
+          <div class="level" aria-hidden="true"><span class="level-fill" id="levelFill"></span></div>
+          <p class="voice-hint" id="voiceHint" aria-live="polite">Microfone desligado.</p>
+        </div>
+      </section>
+
+      <section class="panel chat-panel">
+        <h2 class="panel-title">COMUNICAÇÃO</h2>
+        <div class="messages" id="messages" aria-live="polite"></div>
+
+        <form class="composer" id="chatForm" autocomplete="off">
+          <button type="button" class="btn mic" id="micBtn" aria-label="Falar um comando">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+              <path d="M5 11a7 7 0 0 0 14 0"></path>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+            </svg>
+          </button>
+          <input type="text" id="userInput" placeholder="Digite uma mensagem..." aria-label="Mensagem">
+          <button type="submit" class="btn send">ENVIAR</button>
+        </form>
+      </section>
+
+      <section class="panel status-panel">
+        <h2 class="panel-title">STATUS DO SISTEMA</h2>
+        <ul class="status-list" id="statusList"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    "use strict";
+
+    const REPLY_DELAY_MS = 900;
+    const RECOGNITION_TIMEOUT_MS = 10000; // tempo máximo ouvindo um comando
+
+    /* Ajustes da detecção de palmas.
+       Disparando sem querer? Aumente MIN_PEAK e RATIO.
+       Não detecta suas palmas? Diminua MIN_PEAK. */
+    const CLAP = {
+      MIN_PEAK: 0.3,     // volume mínimo (0 a 1) para contar como palma
+      RATIO: 5,          // quantas vezes acima do ruído de fundo
+      MIN_GAP_MS: 150,   // intervalo mínimo entre duas palmas
+      MAX_GAP_MS: 800,   // intervalo máximo entre duas palmas
+      CONFIRM_MS: 400,   // espera para ver se vem uma 3ª palma (aplauso)
+      COOLDOWN_MS: 3000, // pausa depois de ativar
+      POLL_MS: 20        // de quanto em quanto tempo mede o som
+    };
+
+    const messagesEl = document.getElementById("messages");
+    const formEl     = document.getElementById("chatForm");
+    const inputEl    = document.getElementById("userInput");
+    const micBtn     = document.getElementById("micBtn");
+    const armBtn     = document.getElementById("armBtn");
+    const voiceHint  = document.getElementById("voiceHint");
+    const levelFill  = document.getElementById("levelFill");
+    const clapDots   = document.querySelectorAll("#clapDots span");
+    const coreEl     = document.getElementById("core");
+    const coreLabel  = document.getElementById("coreLabel");
+    const statusList = document.getElementById("statusList");
+    const clockEl    = document.getElementById("clock");
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+
+    function micUnavailableReason() {
+      if (!window.isSecureContext) {
+        return "O microfone só funciona em páginas HTTPS (como o GitHub Pages). Abra o endereço do GitHub Pages.";
+      }
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioCtxClass)) {
+        return "Este navegador não suporta microfone ou Web Audio. Use o Chrome atualizado.";
+      }
+      return "";
+    }
+
+    /* Estado do microfone e da voz */
+    let mode = "off";              // "off" | "standby" | "recognizing"
+    let micEnabled = false;        // o usuário quer o modo de espera ligado
+    let starting = false;          // evita toques duplos enquanto liga
+    let permissionDenied = false;
+    let offHint = "Microfone desligado.";
+
+    let micStream = null;
+    let audioCtx = null;
+    let analyser = null;
+    let samples = null;
+    let pollTimer = null;
+
+    let baseline = 0.02;           // ruído de fundo (média lenta)
+    let wasLoud = false;
+    let lastClapAt = 0;
+    let cooldownUntil = 0;
+    let clapTimes = [];
+    let expireTimer = null;
+    let confirmTimer = null;
+
+    let recognition = null;
+    let recogTimer = null;
+    let liveMsg = null;
+    let activationTimer = null;
+
+    /* Respostas simuladas: para ensinar algo novo, copie um bloco e mude
+       as palavras-chave (sem acentos, minúsculas) e as respostas. */
+    const RULES = [
+      {
+        keywords: ["ola", "oi", "bom dia", "boa tarde", "boa noite", "e ai"],
+        replies: ["Olá! Todos os sistemas estão online. Como posso ajudar?",
+                  "Bem-vindo de volta. Em que posso ser útil?"]
+      },
+      {
+        keywords: ["quem e voce", "seu nome", "quem e jarvis"],
+        replies: ["Sou o JARVIS, versão 0.2. Por enquanto minhas respostas são simuladas: não há inteligência artificial real conectada."]
+      },
+      {
+        keywords: ["hora", "horas"],
+        replies: [() => "Agora são " + new Date().toLocaleTimeString("pt-BR") + "."]
+      },
+      {
+        keywords: ["data", "dia", "hoje"],
+        replies: [() => "Hoje é " + new Date().toLocaleDateString("pt-BR", {
+          weekday: "long", day: "numeric", month: "long", year: "numeric"
+        }) + "."]
+      },
+      {
+        keywords: ["status", "sistema", "sistemas"],
+        replies: ["Núcleo online. O reconhecimento de voz depende do navegador e a IA real ainda não foi conectada. Veja o painel de status."]
+      },
+      {
+        keywords: ["ajuda", "comandos", "o que voce faz"],
+        replies: ["Por enquanto entendo: saudações, hora, data, status e quem sou eu. Tente uma dessas! Você também pode ativar o microfone e dar duas palmas."]
+      },
+      {
+        keywords: ["obrigado", "obrigada", "valeu"],
+        replies: ["Sempre às ordens.", "Disponha."]
+      }
+    ];
+
+    const FALLBACK_REPLIES = [
+      "Ainda não sei responder isso. Minhas respostas nesta versão são simuladas.",
+      "Comando não reconhecido. Digite \"ajuda\" para ver o que sei fazer."
+    ];
+
+    /* Itens do painel de status.
+       type "state": texto colorido (level: ok | warn | idle)
+       type "meter": barra de 0 a 100 */
+    const STATUS_ITEMS = [
+      { label: "Núcleo",   type: "state", get: () => ({ text: "ONLINE", level: "ok" }) },
+      { label: "Conexão",  type: "state", get: () => navigator.onLine
+          ? { text: "ONLINE", level: "ok" }
+          : { text: "OFFLINE", level: "warn" } },
+      { label: "Microfone", type: "state", get: () => micStatus() },
+      { label: "Reconhec. de voz", type: "state", get: () => SpeechRec
+          ? { text: "DISPONÍVEL", level: "ok" }
+          : { text: "INCOMPATÍVEL", level: "warn" } },
+      { label: "IA real",  type: "state", get: () => ({ text: "NÃO CONECTADA", level: "idle" }) },
+      { label: "CPU (simulada)",     type: "meter", get: () => randomBetween(15, 70) },
+      { label: "Memória (simulada)", type: "meter", get: () => randomBetween(30, 80) }
+    ];
+
+    function micStatus() {
+      if (permissionDenied) return { text: "NEGADO", level: "warn" };
+      if (mode === "standby") return { text: "EM ESPERA", level: "ok" };
+      if (mode === "recognizing") return { text: "OUVINDO", level: "ok" };
+      return { text: "DESLIGADO", level: "idle" };
+    }
+
+    function randomBetween(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function pickRandom(list) {
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    // "Olá, Tudo?" -> "ola tudo"
+    function normalize(text) {
+      return text
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    }
+
+    /* Núcleo */
+    const CORE_LABELS = {
+      idle: "NÚCLEO EM ESPERA",
+      standby: "AGUARDANDO 2 PALMAS",
+      thinking: "PROCESSANDO...",
+      listening: "OUVINDO COMANDO"
+    };
+
+    function setCoreState(state) {
+      coreEl.dataset.state = state;
+      coreLabel.textContent = CORE_LABELS[state];
+    }
+
+    function setHint(text) {
+      voiceHint.textContent = text;
+    }
+
+    // Atualiza núcleo, botões e dica de acordo com o modo atual
+    function renderMode() {
+      const isOff = mode === "off";
+      armBtn.textContent = isOff ? "ATIVAR MICROFONE" : "DESATIVAR MICROFONE";
+      armBtn.classList.toggle("active", !isOff);
+      micBtn.classList.toggle("active", mode === "recognizing");
+
+      if (mode === "standby") {
+        setCoreState("standby");
         setHint("Em espera: dê duas palmas para ativar o JARVIS.");
       } else if (mode === "recognizing") {
         setCoreState("listening");
@@ -26,7 +621,7 @@
       }, 1400);
     }
 
-    /* ===== Conversa ===== */
+    /* Conversa */
     function addMessage(sender, text, whoLabel) {
       const msg = document.createElement("div");
       msg.className = "message " + sender;
@@ -89,7 +684,7 @@
       }, REPLY_DELAY_MS);
     }
 
-    /* ===== Texto ao vivo do reconhecimento de voz ===== */
+    /* Texto ao vivo do reconhecimento de voz */
     function showLive(text) {
       if (!text) return;
       if (!liveMsg) {
@@ -107,7 +702,7 @@
       }
     }
 
-    /* ===== Captura do microfone e detecção de palmas ===== */
+    /* Captura do microfone e detecção de palmas */
     async function startCapture() {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -243,7 +838,7 @@
       playActivationAnimation();
     }
 
-    /* ===== Ligar e desligar o modo de espera ===== */
+    /* Ligar e desligar o modo de espera */
     function handleMicError(err) {
       const name = err && err.name ? err.name : "";
       let msg;
@@ -323,7 +918,7 @@
       }
     }
 
-    /* ===== Reconhecimento de fala ===== */
+    /* Reconhecimento de fala */
     function beginVoiceCommand() {
       if (mode === "recognizing") return;
       if (!SpeechRec) {
@@ -427,7 +1022,7 @@
       beginVoiceCommand();
     }
 
-    /* ===== Painel de status ===== */
+    /* Painel de status */
     function buildStatus() {
       STATUS_ITEMS.forEach(item => {
         const li = document.createElement("li");
@@ -473,7 +1068,7 @@
       clockEl.textContent = new Date().toLocaleTimeString("pt-BR");
     }
 
-    /* ===== Inicialização ===== */
+    /* Inicialização */
     formEl.addEventListener("submit", handleSend);
     micBtn.addEventListener("click", onMicButton);
     armBtn.addEventListener("click", onArmButton);
